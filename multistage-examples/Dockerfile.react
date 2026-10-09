@@ -1,0 +1,56 @@
+############################################################
+# EXAMPLE 3: Multi-Stage Dockerfile for React (Node.js)
+############################################################
+#
+# React apps are built (transpiled/bundled) into static HTML,
+# CSS, and JS files. At runtime, you don't need Node.js or
+# npm at all — just a lightweight web server like Nginx.
+#
+#   Single-stage (node image):   ~1.2 GB
+#   Multi-stage  (nginx:alpine):  ~25 MB   ← 98% smaller!
+############################################################
+
+
+# ========================
+# STAGE 1: BUILD STAGE
+# ========================
+# Full Node.js image (~1GB) — has npm, node_modules, build tools
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files first (layer caching optimization)
+COPY package*.json ./
+
+# Install ALL dependencies (including devDependencies for build)
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Build the React app → produces static files in /app/build (or /app/dist)
+RUN npm run build
+
+
+# ========================
+# STAGE 2: RUNTIME STAGE
+# ========================
+# Nginx Alpine image (~25MB) — lightweight static file server
+FROM nginx:alpine
+
+# Copy ONLY the built static files from the build stage
+# Discard: node_modules (~500MB+), source code, npm, Node.js
+COPY --from=builder /app/build /usr/share/nginx/html
+
+# Expose port 80 for HTTP traffic
+EXPOSE 80
+
+# Nginx starts automatically with its default CMD
+CMD ["nginx", "-g", "daemon off;"]
+
+
+############################################################
+# KEY TAKEAWAY:
+# The final image has NO Node.js, NO npm, NO node_modules,
+# NO source code — just the compiled HTML/CSS/JS + Nginx.
+############################################################

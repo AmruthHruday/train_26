@@ -1,0 +1,74 @@
+############################################################
+# EXAMPLE 1: Multi-Stage Dockerfile for Django (Python)
+############################################################
+#
+# WHY multi-stage for Django?
+# ---------------------------
+# In the BUILD stage we install gcc, Python headers, and other
+# build tools needed to compile C-extension packages (e.g.
+# psycopg2 for PostgreSQL, Pillow for images).
+#
+# In the RUNTIME stage we start fresh with a slim image and
+# copy only the installed Python packages (virtualenv) and
+# our application code — no compilers, no headers, no source.
+#
+# Result: Image drops from ~400MB → ~150MB
+############################################################
+
+
+# ========================
+# STAGE 1: BUILD STAGE
+# ========================
+FROM python:3.11-slim AS builder
+
+# Install build dependencies needed to compile Python C-extensions
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a virtual environment so we can cleanly copy it later
+RUN python -m venv /opt/venv
+# Activate the venv by prepending its bin to PATH
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+# Copy and install dependencies inside the venv
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source code (used to run collectstatic in the build stage)
+COPY . .
+
+# Collect static files during build (optional but recommended)
+RUN python manage.py collectstatic --noinput 2>/dev/null || true
+
+
+# ========================
+# STAGE 2: RUNTIME STAGE
+# ========================
+FROM python:3.11-slim AS runtime
+
+# Install only the runtime C-libraries (no compiler, no headers)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Prevent Python from writing .pyc files and buffer stdout/stderr
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Copy the pre-built virtual environment from the builder stage
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+# Copy only the application source code (no build tools came along!)
+COPY --from=builder /app .
+
+EXPOSE 8000
+
+# Run with Gunicorn (production-ready WSGI server) instead of runserver
+CMD ["gunicorn", "myproject.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]

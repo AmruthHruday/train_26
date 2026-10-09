@@ -1,0 +1,68 @@
+version: '3.8'
+
+# ==============================================================================
+# 🐳 DOCKER COMPOSE: Connecting Networking, Volumes, & Bind Mounts
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. DATABASE SERVICE (Uses NAMED VOLUME for persistence)
+  # ----------------------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    container_name: postgres-database
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: appdb
+      POSTGRES_USER: dbuser
+      POSTGRES_PASSWORD: secretpassword
+    # 💾 NAMED VOLUME: Persists database tables across container restarts/removals
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # 🌐 CUSTOM BRIDGE NETWORK: Enables internal communication by container name ("db")
+    networks:
+      - django-network
+
+  # ----------------------------------------------------------------------------
+  # 2. DJANGO WEB APP SERVICE (Uses MULTI-STAGE DOCKERFILE + BIND MOUNT)
+  # ----------------------------------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: django-app
+    restart: unless-stopped
+    # 🌐 NETWORKING & PORT MAPPING: Maps host port 8000 to container port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_HOST=db
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=appdb
+      - DATABASE_USER=dbuser
+      - DATABASE_PASSWORD=secretpassword
+    # 💾 STORAGE: Combines Bind Mount (for local dev) + Named Volume (for user uploads)
+    volumes:
+      # 📂 BIND MOUNT: Syncs local files in real-time without rebuilding image!
+      - .:/app
+      # 📦 NAMED VOLUME: Persists uploaded user files
+      - media_data:/app/media
+    depends_on:
+      - db
+    # 🌐 CONNECTED TO CUSTOM NETWORK: Can resolve the database service via "db:5432"
+    networks:
+      - django-network
+
+# ==============================================================================
+# 🌐 DOCKER NETWORKING (User-Defined Bridge Driver)
+# ==============================================================================
+networks:
+  django-network:
+    driver: bridge # Isolated software bridge with automatic DNS name resolution
+
+# ==============================================================================
+# 💾 DOCKER VOLUMES (Managed Persistent Storage)
+# ==============================================================================
+volumes:
+  postgres_data: # Fully managed by Docker on host (/var/lib/docker/volumes/)
+  media_data:

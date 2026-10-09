@@ -1,0 +1,106 @@
+############################################################
+# EXAMPLE 4: Multi-Stage Dockerfile with DISTROLESS Image
+############################################################
+#
+# This builds the same Go app but uses Google's "distroless"
+# image instead of Alpine for the runtime stage.
+#
+# DISTROLESS = an image with NO shell, NO package manager,
+# NO utilities — ONLY the app binary and minimal OS files.
+#
+# WHY use distroless?
+# -------------------
+# 1. SECURITY: No shell → attackers can't run commands even
+#    if they break into the container. No `sh`, no `bash`,
+#    no `curl`, no `wget` — nothing to exploit.
+#
+# 2. SMALLER: Even smaller than Alpine in many cases.
+#
+# 3. FEWER CVEs: Fewer packages = fewer vulnerability findings
+#    in security scans (Trivy, Snyk, etc.)
+#
+# SIZE COMPARISON for this Go app:
+# ┌────────────────────────────────────────────┐
+# │  golang:1.22-alpine (single stage) → ~800MB│
+# │  alpine:latest      (multi-stage)  → ~12MB │
+# │  distroless/static  (multi-stage)  → ~7MB  │ ← smallest & most secure!
+# │  scratch            (multi-stage)  → ~6MB  │ ← smallest but no user/certs
+# └────────────────────────────────────────────┘
+############################################################
+
+
+# ========================
+# STAGE 1: BUILD STAGE
+# ========================
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+COPY main.go .
+
+# Build a fully static binary (no C library dependencies)
+RUN CGO_ENABLED=0 GOOS=linux go build -o server main.go
+
+
+# ========================
+# STAGE 2: DISTROLESS RUNTIME
+# ========================
+# gcr.io/distroless/static → for statically compiled binaries (Go, Rust)
+# This image contains:
+#   ✅ CA certificates (for HTTPS calls)
+#   ✅ /etc/passwd (nonroot user)
+#   ✅ tzdata (timezone data)
+#   ❌ NO shell (sh, bash)
+#   ❌ NO package manager (apt, apk)
+#   ❌ NO utilities (ls, cat, curl, wget)
+
+FROM gcr.io/distroless/static:nonroot
+
+WORKDIR /
+
+# Copy the compiled binary from the build stage
+COPY --from=builder /app/server .
+
+# Distroless images include a "nonroot" user (UID 65532)
+# Running as non-root is a security best practice
+USER nonroot:nonroot
+
+EXPOSE 8080
+
+# IMPORTANT: With distroless, you MUST use the exec form (JSON array)
+# because there is no shell to interpret the string form!
+#   ✅ CMD ["./server"]          ← exec form (works)
+#   ❌ CMD ./server              ← shell form (FAILS — no /bin/sh!)
+ENTRYPOINT ["./server"]
+
+
+############################################################
+# HOW TO DEBUG DISTROLESS CONTAINERS
+############################################################
+#
+# Since there's no shell, you CANNOT do:
+#   docker exec -it <container> sh     ← FAILS!
+#
+# Instead, use the "debug" tag which includes a busybox shell:
+#   FROM gcr.io/distroless/static:debug
+#
+# Then you can:
+#   docker exec -it <container> /busybox/sh
+#
+# Only use the :debug tag during development, NOT in production.
+############################################################
+
+
+############################################################
+# QUICK REFERENCE — Which distroless image to use:
+############################################################
+#
+# ┌──────────────────────────────────────────────────────────┐
+# │ Language     │ Distroless Image                          │
+# ├──────────────┼──────────────────────────────────────────  │
+# │ Go / Rust    │ gcr.io/distroless/static                  │
+# │ C / C++      │ gcr.io/distroless/base                    │
+# │ Java         │ gcr.io/distroless/java21                  │
+# │ Python       │ gcr.io/distroless/python3                 │
+# │ Node.js      │ gcr.io/distroless/nodejs20                │
+# └──────────────────────────────────────────────────────────┘
+############################################################
